@@ -130,11 +130,25 @@ def load_trades(path, sheet=None):
                 rows = df_data.to_dict(orient="records")
     else:
         with path.open("r", newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            if not reader.fieldnames:
-                raise ValueError("Trade log has no header.")
-            fieldnames = list(reader.fieldnames)
-            rows = list(reader)
+            reader = csv.reader(f)
+            all_rows = list(reader)
+        if not all_rows:
+            raise ValueError("Trade log is empty.")
+        header_row = None
+        for i, row in enumerate(all_rows[:200]):
+            normalized = [str(c).strip().lower() for c in row]
+            if "direction" in normalized and "entry date/time" in normalized and "qty" in normalized:
+                header_row = i
+                break
+        if header_row is None:
+            raise ValueError("Trade log must include direction, entry time, entry price, qty columns.")
+        fieldnames = all_rows[header_row]
+        rows = []
+        for row in all_rows[header_row + 1 :]:
+            if not any(str(c).strip() for c in row):
+                continue
+            row_dict = {fieldnames[i]: row[i] if i < len(row) else "" for i in range(len(fieldnames))}
+            rows.append(row_dict)
 
     direction_col = map_columns(fieldnames, ["direction", "type", "side"])
     entry_time_col = map_columns(fieldnames, ["entrydatetime", "entrydate/time", "entrydate", "entrytime", "timestamp"])
@@ -270,7 +284,7 @@ def main():
     parser.add_argument("--nifty", required=True, help="Nifty 5-minute candles CSV file.")
     parser.add_argument("--out", default="rr_results.csv", help="Output CSV path.")
     parser.add_argument("--sheet", default=None, help="Excel sheet name (if trades is XLSX).")
-    parser.add_argument("--rrs", default="2,3,4,5", help="Comma-separated RR list, e.g. 2,3,4,5")
+    parser.add_argument("--rrs", default="2,3,4,10", help="Comma-separated RR list, e.g. 2,3,4,10")
     parser.add_argument("--risk", type=float, default=10000.0, help="Risk per trade in currency.")
     args = parser.parse_args()
 
