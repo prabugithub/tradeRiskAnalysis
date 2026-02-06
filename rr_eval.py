@@ -2,7 +2,7 @@ import argparse
 import csv
 import sys
 from bisect import bisect_left
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from pathlib import Path
 
 
@@ -190,6 +190,67 @@ def load_trades(path, sheet=None):
     return trades
 
 
+def get_session_window(candles):
+    first_day = candles[0]["dt"].date()
+    day_times = [c["dt"].time() for c in candles if c["dt"].date() == first_day]
+    if not day_times:
+        return None
+    return min(day_times), max(day_times)
+
+
+def count_in_session(trades, session_start, session_end):
+    count = 0
+    for t in trades:
+        tm = t["entry_dt"].time()
+        if session_start <= tm <= session_end:
+            count += 1
+    return count
+
+
+def apply_trade_offset(trades, minutes):
+    if minutes == 0:
+        return trades
+    delta = timedelta(minutes=minutes)
+    for t in trades:
+        t["entry_dt"] = t["entry_dt"] + delta
+    trades.sort(key=lambda r: r["entry_dt"])
+    return trades
+
+
+def maybe_adjust_trade_times(trades, candles, explicit_offset):
+    if explicit_offset is not None:
+        return apply_trade_offset(trades, explicit_offset), explicit_offset
+
+    session_window = get_session_window(candles)
+    if session_window is None:
+        return trades, 0
+
+    session_start, session_end = session_window
+    base_count = count_in_session(trades, session_start, session_end)
+
+    candidates = [0, -330, 330]
+    best_offset = 0
+    best_count = base_count
+    for offset in candidates:
+        if offset == 0:
+            continue
+        shifted = [{"entry_dt": t["entry_dt"] + timedelta(minutes=offset)} for t in trades]
+        count = 0
+        for t in shifted:
+            tm = t["entry_dt"].time()
+            if session_start <= tm <= session_end:
+                count += 1
+        if count > best_count:
+            best_count = count
+            best_offset = offset
+
+    # Apply if it materially improves alignment with session hours.
+    if best_offset != 0 and best_count >= max(3, int(base_count * 1.5)):
+        return apply_trade_offset(trades, best_offset), best_offset
+
+    return trades, 0
+
+
 def evaluate_trade(trade, candles, candle_times, rr, risk):
     direction = trade["direction"]
     entry_dt = trade["entry_dt"]
@@ -213,8 +274,16 @@ def evaluate_trade(trade, candles, candle_times, rr, risk):
     exit_dt = None
     exit_price = None
     outcome = "NO_HIT"
+    entry_day = entry_dt.date()
+    cutoff_dt = datetime.combine(entry_day, time(15, 20))
+    last_candle = None
 
     for candle in candles[start_idx:]:
+        if candle["dt"].date() != entry_day:
+            break
+        if candle["dt"] > cutoff_dt:
+            break
+        last_candle = candle
         high = candle["high"]
         low = candle["low"]
 
@@ -244,13 +313,11 @@ def evaluate_trade(trade, candles, candle_times, rr, risk):
             break
 
     if exit_dt is None:
-        return {
-            "outcome": "NO_HIT",
-            "exit_dt": None,
-            "exit_price": None,
-            "sl": sl,
-            "target": target,
-        }
+        if last_candle is None:
+            return None
+        exit_dt = last_candle["dt"]
+        exit_price = last_candle["close"]
+        outcome = "NO_HIT"
 
     pnl = (exit_price - entry_price) * qty
     if direction == "SHORT":
@@ -286,19 +353,40 @@ def main():
     parser.add_argument("--sheet", default=None, help="Excel sheet name (if trades is XLSX).")
     parser.add_argument("--rrs", default="2,3,4,10", help="Comma-separated RR list, e.g. 2,3,4,10")
     parser.add_argument("--risk", type=float, default=10000.0, help="Risk per trade in currency.")
+    parser.add_argument("--trade-offset-minutes", type=int, default=None, help="Shift trade times by minutes (e.g., -330).")
     args = parser.parse_args()
 
     candles = load_nifty_csv(args.nifty)
     candle_times = [c["dt"] for c in candles]
     trades = load_trades(args.trades, sheet=args.sheet)
+    trades, applied_offset = maybe_adjust_trade_times(trades, candles, args.trade_offset_minutes)
     rrs = [float(x.strip()) for x in args.rrs.split(",") if x.strip()]
 
     results = []
-    for trade in trades:
-        for rr in rrs:
+    for rr in rrs:
+        last_exit_dt = None
+        blocked_day = None
+        for trade in trades:
+            entry_dt = trade["entry_dt"]
+            entry_day = entry_dt.date()
+            if blocked_day == entry_day:
+                continue
+            if last_exit_dt is not None and entry_dt < last_exit_dt:
+                continue
+
             eval_result = evaluate_trade(trade, candles, candle_times, rr=rr, risk=args.risk)
             if eval_result is None:
                 continue
+
+            exit_dt = eval_result["exit_dt"]
+            outcome = eval_result["outcome"]
+            if exit_dt is None:
+                blocked_day = entry_day
+            else:
+                last_exit_dt = exit_dt
+                if outcome == "NO_HIT":
+                    blocked_day = entry_day
+
             row = {
                 "rr": rr,
                 "direction": trade["direction"],
@@ -320,7 +408,7 @@ def main():
     # Per-RR stats
     stats = []
     for rr in rrs:
-        rr_rows = [r for r in results if r["rr"] == rr and r["outcome"] != "NO_HIT"]
+        rr_rows = [r for r in results if r["rr"] == rr]
         pnls = [r["pnl"] for r in rr_rows if r["pnl"] is not None]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
@@ -393,6 +481,8 @@ def main():
 
     print(f"Wrote {out_path}")
     print(f"Wrote {stats_path}")
+    if applied_offset:
+        print(f"Applied trade time offset: {applied_offset} minutes")
 
 
 if __name__ == "__main__":
