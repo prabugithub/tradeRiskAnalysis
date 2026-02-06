@@ -333,9 +333,9 @@ def evaluate_trade(trade, candles, candle_times, rr, risk):
     }
 
 
-def compute_drawdown(pnls):
-    peak = 0.0
-    equity = 0.0
+def compute_drawdown(pnls, initial_capital):
+    peak = initial_capital
+    equity = initial_capital
     max_dd = 0.0
     for pnl in pnls:
         equity += pnl
@@ -343,6 +343,23 @@ def compute_drawdown(pnls):
         dd = peak - equity
         max_dd = max(max_dd, dd)
     return max_dd
+
+
+def compute_drawdown_series(pnls, initial_capital):
+    peak = initial_capital
+    equity = initial_capital
+    dd_abs = []
+    dd_pct = []
+    for pnl in pnls:
+        equity += pnl
+        peak = max(peak, equity)
+        dd = peak - equity
+        dd_abs.append(dd)
+        if peak > 0:
+            dd_pct.append(dd / peak * 100.0)
+        else:
+            dd_pct.append(0.0)
+    return dd_abs, dd_pct
 
 
 def main():
@@ -353,6 +370,7 @@ def main():
     parser.add_argument("--sheet", default=None, help="Excel sheet name (if trades is XLSX).")
     parser.add_argument("--rrs", default="2,3,4,10", help="Comma-separated RR list, e.g. 2,3,4,10")
     parser.add_argument("--risk", type=float, default=10000.0, help="Risk per trade in currency.")
+    parser.add_argument("--initial-capital", type=float, default=1000000.0, help="Starting capital for drawdown calc.")
     parser.add_argument("--trade-offset-minutes", type=int, default=None, help="Shift trade times by minutes (e.g., -330).")
     args = parser.parse_args()
 
@@ -409,6 +427,7 @@ def main():
     stats = []
     for rr in rrs:
         rr_rows = [r for r in results if r["rr"] == rr]
+        rr_rows_sorted = sorted(rr_rows, key=lambda r: r["entry_dt"])
         pnls = [r["pnl"] for r in rr_rows if r["pnl"] is not None]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
@@ -418,7 +437,7 @@ def main():
         avg_loss = sum(losses) / len(losses) if losses else 0.0
         expectancy = (win_rate / 100) * avg_win + (1 - win_rate / 100) * avg_loss
         total_pnl = sum(pnls) if pnls else 0.0
-        max_dd = compute_drawdown(pnls)
+        max_dd = compute_drawdown(pnls, initial_capital=args.initial_capital)
         stats.append(
             {
                 "rr": rr,
@@ -433,6 +452,12 @@ def main():
                 "max_drawdown": max_dd,
             }
         )
+
+        pnls_for_dd = [r["pnl"] if r["pnl"] is not None else 0.0 for r in rr_rows_sorted]
+        dd_abs, dd_pct = compute_drawdown_series(pnls_for_dd, initial_capital=args.initial_capital)
+        for row, dd_a, dd_p in zip(rr_rows_sorted, dd_abs, dd_pct):
+            row["drawdown_abs"] = dd_a
+            row["drawdown_pct"] = dd_p
 
     # Write results
     out_path = Path(args.out)
@@ -449,6 +474,8 @@ def main():
             "exit_price",
             "outcome",
             "pnl",
+            "drawdown_abs",
+            "drawdown_pct",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
