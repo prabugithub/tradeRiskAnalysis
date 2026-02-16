@@ -429,13 +429,23 @@ def main():
         rr_rows = [r for r in results if r["rr"] == rr]
         rr_rows_sorted = sorted(rr_rows, key=lambda r: r["entry_dt"])
         pnls = [r["pnl"] for r in rr_rows if r["pnl"] is not None]
-        wins = [p for p in pnls if p > 0]
-        losses = [p for p in pnls if p < 0]
+
+        win_rows = [r for r in rr_rows if r["outcome"] == "WIN" and r["pnl"] is not None]
+        loss_rows = [r for r in rr_rows if r["outcome"] == "LOSS" and r["pnl"] is not None]
+        no_hit_rows = [r for r in rr_rows if r["outcome"] == "NO_HIT" and r["pnl"] is not None]
+
+        wins = [r["pnl"] for r in win_rows]
+        losses = [r["pnl"] for r in loss_rows]
+        no_hits = [r["pnl"] for r in no_hit_rows]
+
         total = len(pnls)
-        win_rate = (len(wins) / total * 100) if total else 0.0
+        decided_trades = len(wins) + len(losses)
+        win_rate = (len(wins) / decided_trades * 100) if decided_trades else 0.0
         avg_win = sum(wins) / len(wins) if wins else 0.0
         avg_loss = sum(losses) / len(losses) if losses else 0.0
-        expectancy = (win_rate / 100) * avg_win + (1 - win_rate / 100) * avg_loss
+        no_hit_avg_pnl = sum(no_hits) / len(no_hits) if no_hits else 0.0
+        no_hit_total_pnl = sum(no_hits) if no_hits else 0.0
+        expectancy = (win_rate / 100) * avg_win + (1 - win_rate / 100) * avg_loss if decided_trades else 0.0
         total_pnl = sum(pnls) if pnls else 0.0
         max_dd = compute_drawdown(pnls, initial_capital=args.initial_capital)
         stats.append(
@@ -444,9 +454,12 @@ def main():
                 "trades": total,
                 "wins": len(wins),
                 "losses": len(losses),
+                "no_hit_trades": len(no_hits),
                 "win_rate": win_rate,
                 "avg_win": avg_win,
                 "avg_loss": avg_loss,
+                "no_hit_avg_pnl": no_hit_avg_pnl,
+                "no_hit_total_pnl": no_hit_total_pnl,
                 "expectancy": expectancy,
                 "total_pnl": total_pnl,
                 "max_drawdown": max_dd,
@@ -494,9 +507,12 @@ def main():
             "trades",
             "wins",
             "losses",
+            "no_hit_trades",
             "win_rate",
             "avg_win",
             "avg_loss",
+            "no_hit_avg_pnl",
+            "no_hit_total_pnl",
             "expectancy",
             "total_pnl",
             "max_drawdown",
