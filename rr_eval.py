@@ -182,12 +182,13 @@ def load_trades(path, sheet=None):
                 "entry_dt": dt,
                 "entry_price": entry_price,
                 "qty": qty,
+                "source_row": {col: row.get(col, "") for col in fieldnames},
             }
         )
     trades.sort(key=lambda r: r["entry_dt"])
     if not trades:
         raise ValueError("No valid trades loaded.")
-    return trades
+    return trades, fieldnames
 
 
 def get_session_window(candles):
@@ -376,7 +377,7 @@ def main():
 
     candles = load_nifty_csv(args.nifty)
     candle_times = [c["dt"] for c in candles]
-    trades = load_trades(args.trades, sheet=args.sheet)
+    trades, input_columns = load_trades(args.trades, sheet=args.sheet)
     trades, applied_offset = maybe_adjust_trade_times(trades, candles, args.trade_offset_minutes)
     rrs = [float(x.strip()) for x in args.rrs.split(",") if x.strip()]
 
@@ -418,6 +419,9 @@ def main():
                 "outcome": eval_result["outcome"],
                 "pnl": eval_result.get("pnl"),
             }
+            source_row = trade.get("source_row", {})
+            for col in input_columns:
+                row[col] = source_row.get(col, "")
             results.append(row)
 
     if not results:
@@ -475,7 +479,7 @@ def main():
     # Write results
     out_path = Path(args.out)
     with out_path.open("w", newline="", encoding="utf-8") as f:
-        fieldnames = [
+        base_fieldnames = [
             "rr",
             "direction",
             "entry_dt",
@@ -490,6 +494,8 @@ def main():
             "drawdown_abs",
             "drawdown_pct",
         ]
+        extra_input_cols = [c for c in input_columns if c not in base_fieldnames]
+        fieldnames = base_fieldnames + extra_input_cols
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in results:
