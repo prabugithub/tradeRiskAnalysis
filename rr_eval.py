@@ -369,7 +369,7 @@ def main():
     parser.add_argument("--nifty", required=True, help="Nifty 5-minute candles CSV file.")
     parser.add_argument("--out", default="rr_results.csv", help="Output CSV path.")
     parser.add_argument("--sheet", default=None, help="Excel sheet name (if trades is XLSX).")
-    parser.add_argument("--rrs", default="2,3,4,10", help="Comma-separated RR list, e.g. 2,3,4,10")
+    parser.add_argument("--rrs", default="1,2,3,4,10", help="Comma-separated RR list, e.g. 2,3,4,10")
     parser.add_argument("--risk", type=float, default=10000.0, help="Risk per trade in currency.")
     parser.add_argument("--initial-capital", type=float, default=1000000.0, help="Starting capital for drawdown calc.")
     parser.add_argument("--trade-offset-minutes", type=int, default=None, help="Shift trade times by minutes (e.g., -330).")
